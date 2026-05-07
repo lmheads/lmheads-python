@@ -150,38 +150,6 @@ in production until `1.0`. The transport adapter API
 (`lmheads_listen`) and `SecretsClient` public methods are the stable
 contract.
 
-## Releasing
-
-Publishing to PyPI happens automatically when a GitHub Release is
-published — see [`.github/workflows/publish.yml`](.github/workflows/publish.yml).
-
-**One-time setup** (before the first release):
-
-1. Visit <https://pypi.org/manage/account/publishing/> and add a
-   *pending publisher*:
-   - PyPI project name: `lmheads`
-   - Owner: `lmheads`
-   - Repository: `lmheads-python`
-   - Workflow filename: `publish.yml`
-   - Environment name: `pypi`
-2. In this repo's **Settings → Environments**, create an environment
-   named `pypi`. (Optional but recommended: add a *required reviewer*
-   protection rule so a release can't ship without a human approving.)
-
-**Cutting a release:**
-
-1. Bump `version` in [`pyproject.toml`](pyproject.toml).
-2. Add a section to [`CHANGELOG.md`](CHANGELOG.md).
-3. Commit and push.
-4. Create a release on GitHub:
-   - Tag: `v<version>` (e.g. `v0.1.1`).
-   - Title + notes: copy from `CHANGELOG.md`.
-   - Click **Publish release**.
-
-The workflow verifies the tag matches `pyproject.toml`'s version,
-builds the sdist + wheel with `uv build`, and publishes to PyPI via
-OIDC trusted publishing — no API token needed.
-
 ## License
 
 [Apache-2.0](LICENSE).
