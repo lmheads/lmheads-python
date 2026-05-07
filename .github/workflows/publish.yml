@@ -1,0 +1,81 @@
+name: Publish to PyPI
+
+# Triggered when a GitHub Release is **published** (not just drafted).
+# Workflow:
+#   1. tag → strip "v" prefix → must match pyproject's version. Catches the
+#      "I bumped the tag but forgot pyproject.toml" mistake before the
+#      package ships.
+#   2. Build sdist + wheel with `uv build`.
+#   3. Publish to PyPI via OIDC trusted publishing (no API token).
+#
+# One-time PyPI setup (do this BEFORE the first release):
+#   1. https://pypi.org/manage/account/publishing/
+#   2. Add a Pending publisher with:
+#        PyPI project name: lmheads
+#        Owner:             lmheads
+#        Repository:        lmheads-python
+#        Workflow filename: publish.yml
+#        Environment name:  pypi
+#   3. Create a GitHub environment named "pypi" in the repo's
+#      Settings → Environments. Optional protections (required reviewers,
+#      tag pattern restriction) can be added there.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/lmheads
+    permissions:
+      # `id-token: write` is required for OIDC trusted publishing.
+      # `contents: read` is the default but spelled out for clarity.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Verify tag matches pyproject version
+        run: |
+          set -euo pipefail
+          # Strip the leading "v" from the release tag (v0.1.0 → 0.1.0).
+          TAG="${GITHUB_REF_NAME#v}"
+          PROJECT_VERSION=$(
+            python -c "
+          import sys, tomllib
+          with open('pyproject.toml', 'rb') as f:
+              print(tomllib.load(f)['project']['version'])
+          "
+          )
+          echo "tag=$TAG  pyproject.version=$PROJECT_VERSION"
+          if [ "$TAG" != "$PROJECT_VERSION" ]; then
+            echo "::error::tag $TAG does not match pyproject version $PROJECT_VERSION"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Inspect built artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # OIDC publish — no `password:` / `repository-url:` overrides
+          # needed; the action defaults to PyPI proper and authenticates
+          # via the OIDC id-token from this workflow.
