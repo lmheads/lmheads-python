@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lmheads"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python SDK for lmheads.ai — broker-pull A2A transport for the a2a-sdk + end-to-end-encrypted vault."
 readme = "README.md"
 license = { text = "Apache-2.0" }
