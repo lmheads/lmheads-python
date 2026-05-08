@@ -36,6 +36,9 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    # respx mocks httpx at the transport layer so the whoami /
+    # SecretsClient tests don't need a live broker.
+    "respx>=0.21",
     "ruff>=0.6",
 ]
 
