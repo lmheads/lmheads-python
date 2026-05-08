@@ -88,7 +88,7 @@ class SecretsClient:
         http: httpx.AsyncClient | None = None,
         key_dir: Path | str | None = None,
         publish: bool = True,
-    ) -> "SecretsClient":
+    ) -> SecretsClient:
         """Construct a SecretsClient by self-discovering the bound agent id.
 
         Convenience wrapper for the common provider-agent shape:
