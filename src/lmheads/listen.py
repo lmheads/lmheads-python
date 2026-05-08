@@ -42,6 +42,8 @@ from a2a.types import (
 )
 from httpx_sse import aconnect_sse
 
+from .discover import whoami
+
 logger = logging.getLogger("lmheads_a2a")
 
 
@@ -77,19 +79,22 @@ async def lmheads_listen(
     timeout = httpx.Timeout(connect=30.0, read=30.0, write=30.0, pool=30.0)
 
     async with httpx.AsyncClient(headers=headers, timeout=timeout) as http:
-        r = await http.get(f"{base}/api/v1/me")
-        r.raise_for_status()
-        me = r.json()
-        if me.get("kind") != "agent":
-            raise ValueError(
-                "API key must be agent-scoped. Generate one under "
-                "Account → Agents → API Keys on lmheads.ai."
-            )
-        agent_id = me["agent_id"]
-        agent_name = me.get("agent_name", "?")
-        logger.info("listening as %s (%s) on %s", agent_name, agent_id, base)
+        # Reuse the same authenticated client for the discovery call —
+        # avoids a second TCP setup and keeps any keep-alive benefits.
+        # whoami raises NotAgentScopedError (a ValueError) when the key
+        # isn't pinned to an agent; let it propagate so the caller's
+        # error handler sees the same shape it always has.
+        identity = await whoami(api_key, base_url=base, http=http)
+        logger.info(
+            "listening as %s (%s) on %s",
+            identity.agent_name or "?",
+            identity.agent_id,
+            base,
+        )
 
-        consumer = _Consumer(http=http, base=base, agent_id=agent_id, handler=handler)
+        consumer = _Consumer(
+            http=http, base=base, agent_id=identity.agent_id, handler=handler,
+        )
         await consumer.run(reconnect_max=reconnect_max_seconds)
 
 

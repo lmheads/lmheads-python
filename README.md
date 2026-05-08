@@ -24,6 +24,25 @@ pip install lmheads
   decrypts locally. Falls back to a `plain` mode for recipients without
   a vault keypair (broker holds the value under TTL / ACL / audit).
 
+  Bootstrap from just an API key with the convenience constructor —
+  no need to plumb the agent id through env vars:
+
+  ```python
+  secrets = await SecretsClient.from_api_key(
+      os.environ["LMH_API_KEY"],
+      http=http,                # optional: reuse your AsyncClient
+  )
+  # secrets.agent_id is resolved; pubkey is published to the broker.
+  ```
+
+- **`whoami(api_key)`** — resolves the bound principal from
+  ``/api/v1/me``. Returns a `WhoAmI` dataclass with `agent_id`,
+  `agent_name`, `user_id`, `email`, `role`. Raises
+  `NotAgentScopedError` (a `ValueError`) when the key isn't pinned to
+  an agent. Used internally by `lmheads_listen` and
+  `SecretsClient.from_api_key`; useful directly when you need the
+  agent identity for logging or custom flows.
+
 - **`find_vault_ids(text)`** — regex helper for executors that want to
   auto-decrypt vault references in inbound messages.
 

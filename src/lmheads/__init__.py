@@ -44,6 +44,7 @@ Quickstart::
     asyncio.run(main())
 """
 
+from lmheads.discover import NotAgentScopedError, WhoAmI, whoami
 from lmheads.listen import lmheads_listen
 from lmheads.secrets import SecretsClient, find_vault_ids
 
@@ -51,6 +52,9 @@ __all__ = [
     "lmheads_listen",
     "SecretsClient",
     "find_vault_ids",
+    "whoami",
+    "WhoAmI",
+    "NotAgentScopedError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
