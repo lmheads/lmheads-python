@@ -275,13 +275,29 @@ class _Consumer:
             try:
                 async for event in self.handler.on_message_send_stream(send_req, _ctx()):
                     await self._on_executor_event(event, task_id)
-            except BaseException:
-                # Roll back the dedup marker so a retry (resend,
-                # reconnect, or a later SSE echo) can pick up this
-                # turn. We don't want a transient error to silently
-                # drop a message.
+            except asyncio.CancelledError:
+                # Cooperative shutdown — propagate so the consumer
+                # exits cleanly. Roll back the dedup marker so the
+                # message gets reprocessed on the next boot.
                 self._processed_user_msgs.discard(msg_id)
                 raise
+            except Exception as exc:  # noqa: BLE001
+                # Anything else (proto validation, executor bug,
+                # transport hiccup): translate into a rejected task
+                # state so the caller sees a clean failure instead of
+                # the task hanging until TTL. The dedup marker stays
+                # set — re-running the same payload would just hit
+                # the same exception, so retrying is the caller's
+                # call (with a corrected payload).
+                logger.exception(
+                    "executor failed for task %s: %s", task_id[:8], exc,
+                )
+                try:
+                    await self._send_rejection(task_id, _format_executor_error(exc))
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "could not post rejection for %s", task_id[:8],
+                    )
 
     async def _on_executor_event(self, event: Any, task_id: str) -> None:
         if isinstance(event, Task):
@@ -298,6 +314,24 @@ class _Consumer:
         if isinstance(event, TaskArtifactUpdateEvent):
             logger.debug("artifact update event ignored (not yet wired): %s", task_id[:8])
             return
+
+    async def _send_rejection(self, task_id: str, message: str) -> None:
+        """Post a rejected-state update to the broker with an error message.
+
+        Used when the executor (or the SDK's pre-execution validators)
+        raises before emitting any events. Without this the task would
+        sit in `submitted` until the broker's TTL sweep — the caller
+        sees it hang. Rejecting with the validator's error text gives
+        the caller something concrete to act on (e.g. an LLM caller
+        re-fetching the agent card and reconstructing the payload).
+        """
+        body = {
+            "state": "rejected",
+            "parts": [{"kind": "text", "text": message}],
+        }
+        url = f"{self.base}/api/v1/a2a/tasks/{task_id}/respond"
+        r = await self.http.post(url, json=body)
+        r.raise_for_status()
 
     async def _respond(self, task_id: str, evt: TaskStatusUpdateEvent) -> None:
         wire_state = _STATE_TO_WIRE.get(evt.status.state, "working")
@@ -335,13 +369,69 @@ def _ctx() -> ServerCallContext:
     return ServerCallContext()
 
 
+def _format_executor_error(exc: BaseException) -> str:
+    """Render an exception as a caller-facing rejection message.
+
+    Special-cases a2a-sdk's InvalidParamsError (raised by
+    validate_proto_required_fields) so the field-level errors land
+    bullet-by-bullet — that's the most actionable thing an LLM caller
+    can see. Falls back to "type: message" for anything else, which
+    is at least specific enough for a human operator to debug from
+    the broker's task page.
+    """
+    data = getattr(exc, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("errors"), list):
+        details = "\n".join(
+            f"- {e.get('field') or '?'}: {e.get('message') or '?'}"
+            for e in data["errors"]
+        )
+        msg = getattr(exc, "message", None) or str(exc) or "Validation failed"
+        return (
+            f"{msg}. The agent rejected the request because the "
+            f"following required fields were missing or empty:\n\n"
+            f"{details}\n\n"
+            f"Fetch the agent card (get_agent_card) for the full "
+            f"input schema and re-send with all required fields set."
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _message_proto(
     d: dict, task_id: str, context_id: str, role: int
 ) -> Message:
     parts: list[Part] = []
     for p in d.get("parts") or []:
-        if "text" in p:
+        # Text parts: simplest path, just copy the string through.
+        if "text" in p and p["text"] is not None:
             parts.append(Part(text=p["text"]))
+            continue
+        # Data parts: callers like the lmheads claude-code plugin's
+        # start_task tool ship structured input as
+        # {"kind": "data", "data": {…}}. The Part proto's `data` field
+        # is a google.protobuf.Value; ParseDict produces it from a
+        # native Python dict round-trip. We pull whichever shape the
+        # broker forwarded ("data" or, defensively, "value") so a
+        # rename on the server side doesn't break agents silently.
+        raw_data = p.get("data") if "data" in p else p.get("value")
+        if raw_data is not None:
+            from google.protobuf import struct_pb2
+            from google.protobuf.json_format import ParseDict
+            value = struct_pb2.Value()
+            try:
+                if isinstance(raw_data, dict):
+                    ParseDict(raw_data, value.struct_value)
+                else:
+                    # Scalars / lists land as a Value directly.
+                    ParseDict({"_": raw_data}, value.struct_value)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not encode data part: %s", exc)
+                continue
+            parts.append(Part(data=value))
+            continue
+        # File parts (kind="file") aren't surfaced through the proto's
+        # Part shape in this SDK version; if a caller sends one we
+        # silently drop it rather than fail. The executor can fetch
+        # the artifact via the broker if it cares.
     return Message(
         message_id=d.get("messageId") or d.get("message_id") or uuid.uuid4().hex,
         task_id=task_id,
