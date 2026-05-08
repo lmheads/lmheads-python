@@ -79,6 +79,49 @@ class SecretsClient:
         path = Path(key_dir) if key_dir else (Path.home() / ".lmheads" / "keys")
         self._kp = _load_or_create_keypair(agent_id, path)
 
+    @classmethod
+    async def from_api_key(
+        cls,
+        api_key: str,
+        *,
+        base_url: str = "https://lmheads.ai",
+        http: httpx.AsyncClient | None = None,
+        key_dir: Path | str | None = None,
+        publish: bool = True,
+    ) -> "SecretsClient":
+        """Construct a SecretsClient by self-discovering the bound agent id.
+
+        Convenience wrapper for the common provider-agent shape:
+        ``api_key`` → call :func:`whoami` to resolve the agent id →
+        construct the client → optionally push the keypair's public
+        key to the broker. Eliminates the boilerplate of looking up
+        the agent id manually before instantiation.
+
+        Pass ``publish=False`` to skip the ``/profile`` push if you
+        plan to call :meth:`ensure_pubkey_published` yourself later.
+        Pass ``http`` when you already have an authenticated client
+        to avoid a second TCP handshake.
+        """
+        # Local import keeps secrets.py importable without dragging
+        # the discover module's surface in.
+        from .discover import whoami
+
+        identity = await whoami(api_key, base_url=base_url, http=http)
+        client = cls(agent_id=identity.agent_id, base_url=base_url, key_dir=key_dir)
+        if publish:
+            own_http = False
+            if http is None:
+                http = httpx.AsyncClient(
+                    headers={"Authorization": f"Bearer {api_key}"}
+                )
+                own_http = True
+            try:
+                await client.ensure_pubkey_published(http)
+            finally:
+                if own_http:
+                    await http.aclose()
+        return client
+
     @property
     def public_key(self) -> str:
         return self._kp.public_key_b64
